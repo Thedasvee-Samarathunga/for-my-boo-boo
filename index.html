@@ -991,8 +991,14 @@ const IMAGES = {
 
   /* ---------- pointer: tilt + squish + swipe ---------- */
   let down = null, pointerHotUntil = 0;
-  const noSquish = t => t.closest('.write, button, .squishy, .maze');
+  const isMazeTarget = t => !!(t && t.closest && t.closest('.maze'));
+  const isMazeGesture = () => scene.dataset.mazeGesture === '1';
+  const noSquish = t => t && t.closest && t.closest('.write, button, .squishy, .maze');
   scene.addEventListener('pointermove', e => {
+    // On touch devices, keep maze drags completely isolated from the book.
+    // Pointer capture is not equally reliable across mobile browsers, so also
+    // guard with the maze-gesture flag set by the maze itself.
+    if (isMazeTarget(e.target) || isMazeGesture()) return;
     pointerHotUntil = performance.now() + 140;
     if (e.pointerType === 'mouse') hovering = true;
     const tiltMax = M ? 4 : 6;
@@ -1003,24 +1009,33 @@ const IMAGES = {
     book.style.setProperty('--sx', ((nx + 1) * 50).toFixed(1) + '%');
     book.style.setProperty('--sy', ((ny + 1) * 50).toFixed(1) + '%');
   });
-  scene.addEventListener('pointerleave', () => { hovering = false; touching = false; rx.t = 0; ry.t = 0; releaseBook(); down = null; });
+  scene.addEventListener('pointerleave', () => {
+    if (isMazeGesture()) return;
+    hovering = false; touching = false; rx.t = 0; ry.t = 0; releaseBook(); down = null;
+  });
   scene.addEventListener('pointerdown', e => {
+    // Do not even start a book gesture when a maze interaction begins.
+    if (isMazeTarget(e.target) || isMazeGesture()) { down = null; return; }
     if (e.pointerType !== 'mouse') touching = true;
     if (!noSquish(e.target)) sq.t = 0.035;
     down = { x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
   });
   function releaseBook() { if (sq.t !== 0) { sq.t = 0; sq.v -= 0.35; } }
   scene.addEventListener('pointerup', e => {
+    if (isMazeTarget(e.target) || isMazeGesture()) { touching = false; down = null; return; }
     touching = false;
     releaseBook();
     if (!down) return;
     const dx = e.clientX - down.x, dy = e.clientY - down.y, dt = performance.now() - down.t;
     const touchy = e.pointerType !== 'mouse';
-    const blocked = down.target.closest(touchy ? '.squishy, button, .write, .maze' : '[data-noswipe], .squishy, button, .write, .maze');
+    const blocked = down.target && down.target.closest ? down.target.closest(touchy ? '.squishy, button, .write, .maze' : '[data-noswipe], .squishy, button, .write, .maze') : null;
     if (!blocked && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3 && dt < 700) go(pos + (dx < 0 ? 1 : -1));
     down = null;
   });
-  scene.addEventListener('pointercancel', () => { touching = false; releaseBook(); down = null; });
+  scene.addEventListener('pointercancel', e => {
+    if (isMazeTarget(e.target) || isMazeGesture()) { touching = false; down = null; return; }
+    touching = false; releaseBook(); down = null;
+  });
 
   /* ---------- navigation ---------- */
   const dotsEl = document.getElementById('dots');
@@ -1113,13 +1128,21 @@ const IMAGES = {
   /* ---------- main loop (book physics — cheap) ---------- */
   let last = performance.now(), lastFrame = 0;
   function loop(now) {
+    // Freeze the outer book's tilt and squash while the maze is being played.
+    // This is a second line of defence for mobile browsers that retarget or
+    // lose captured pointers during a finger drag.
+    const mazeActive = isMazeGesture();
+    if (mazeActive) {
+      hovering = false; touching = false; down = null;
+      rx.t = 0; ry.t = 0; sq.t = 0; sq.x = 0; sq.v = 0;
+    }
     const turning = Math.abs(shift.x - shift.t) > .25 || leaves.some(L => Math.abs(L.a.x - L.a.t) > .6);
     const squishing = Math.abs(sq.x) > .0005 || Math.abs(sq.v) > .01 || squishies.some(o => o.live);
-    const highRate = touching || !!down || now < pointerHotUntil || turning || squishing;
+    const highRate = !mazeActive && (touching || !!down || now < pointerHotUntil || turning || squishing);
     const minFrame = highRate ? 1000 / 60 : 1000 / 30;
     if (now - lastFrame < minFrame) { requestAnimationFrame(loop); return; }
     const dt = Math.min(1 / 30, (now - last) / 1000); last = now; lastFrame = now;
-    if (!hovering && !touching) { const t = now / 1000; rx.t = Math.sin(t * .7) * 1.6; ry.t = Math.cos(t * .55) * 2.2; }
+    if (!mazeActive && !hovering && !touching) { const t = now / 1000; rx.t = Math.sin(t * .7) * 1.6; ry.t = Math.cos(t * .55) * 2.2; }
     const steps = highRate ? 4 : 2, h = dt / steps;
     for (let i = 0; i < steps; i++) {
       stepSpring(rx, 110, 16, h);
@@ -2035,11 +2058,41 @@ const IMAGES = {
     var r = board.getBoundingClientRect();
     return [Math.max(0, Math.min(N - 1, Math.floor((e.clientX - r.left) / r.width * N))), Math.max(0, Math.min(N - 1, Math.floor((e.clientY - r.top) / r.height * N)))];
   }
-  // Keep maze gestures inside the maze: don't let them reach the book's
-  // pointer handlers, which drive the page's tilt and squish effects.
-  board.addEventListener('pointerdown', function (e) { e.stopPropagation(); dragging = true; try { board.setPointerCapture(e.pointerId); } catch (_) {} board.focus({ preventScroll: true }); var c = cellAt(e); toward(c[0], c[1]); });
-  board.addEventListener('pointermove', function (e) { e.stopPropagation(); if (!dragging) return; var c = cellAt(e); toward(c[0], c[1]); });
-  ['pointerup', 'pointercancel'].forEach(function (t) { board.addEventListener(t, function (e) { e.stopPropagation(); dragging = false; }); });
+  // Keep maze gestures inside the maze. In addition to stopping bubbling,
+  // flag the containing book scene so its phone gesture handlers can ignore
+  // all pointer movement until the maze drag is finished. This covers mobile
+  // browsers where pointer capture may be inconsistent.
+  var bookScene = board.closest('.scene');
+  function markMazeGesture(active) {
+    if (bookScene) {
+      if (active) bookScene.dataset.mazeGesture = '1';
+      else delete bookScene.dataset.mazeGesture;
+    }
+  }
+  function endMazeGesture(e) {
+    if (e) e.stopPropagation();
+    dragging = false;
+    markMazeGesture(false);
+  }
+  board.addEventListener('pointerdown', function (e) {
+    e.stopPropagation();
+    markMazeGesture(true);
+    dragging = true;
+    try { board.setPointerCapture(e.pointerId); } catch (_) {}
+    board.focus({ preventScroll: true });
+    var c = cellAt(e); toward(c[0], c[1]);
+  });
+  board.addEventListener('pointermove', function (e) {
+    e.stopPropagation();
+    if (!dragging) return;
+    var c = cellAt(e); toward(c[0], c[1]);
+  });
+  ['pointerup', 'pointercancel'].forEach(function (t) {
+    board.addEventListener(t, endMazeGesture);
+  });
+  // Fallback cleanup if a mobile browser releases the pointer outside the board.
+  document.addEventListener('pointerup', function () { if (dragging) endMazeGesture(); });
+  document.addEventListener('pointercancel', function () { if (dragging) endMazeGesture(); });
   board.addEventListener('keydown', function (e) {
     var k = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R', w: 'U', s: 'D', a: 'L', d: 'R' }[e.key];
     if (k) { e.preventDefault(); e.stopPropagation(); move(k); }
