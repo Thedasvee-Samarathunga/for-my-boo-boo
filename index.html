@@ -689,7 +689,7 @@
 </section>
 
 <!-- ===================== SPREAD 5 · RIGHT — poem + my pets ===================== -->
-<section class="pg p-poem" aria-label="Spread 5, right">
+<section class="pg p-poem maze-page" aria-label="Spread 5, right">
   <div class="lawn">
     <svg viewBox="0 0 100 42" preserveAspectRatio="none" aria-hidden="true">
       <path d="M0 18 C20 10 38 20 60 14 C80 8 92 14 100 12 L100 42 L0 42 Z" fill="#e8caff" opacity=".7"/>
@@ -974,6 +974,14 @@ const IMAGES = {
     if (M) return sideOf(pos) === 'R' ? -50 : 0;
     const s = spreadOf(pos); return s === 0 ? -25 : s === SPREADS - 1 ? 25 : 0;
   };
+  // Spread 5's right-hand page contains the maze. Disable squash effects
+  // whenever that page is visible, not just while a maze pointer is down.
+  const isMazePageActive = () => spreadOf(pos) === 5 && (!M || sideOf(pos) === 'R');
+  function syncMazePageState() {
+    const active = isMazePageActive();
+    scene.classList.toggle('maze-page-active', active);
+    if (active) { sq.t = 0; sq.x = 0; sq.v = 0; }
+  }
 
   /* ---------- springs ---------- */
   function spring(x = 0) { return { x, v: 0, t: x }; }
@@ -982,7 +990,7 @@ const IMAGES = {
   let hovering = false, touching = false;
 
   /* ---------- squishies ---------- */
-  const squishies = [...inner.querySelectorAll('.squishy')].map(el => ({ el, s: spring(), live: false }));
+  const squishies = [...inner.querySelectorAll('.squishy')].filter(el => !el.closest('.maze-page')).map(el => ({ el, s: spring(), live: false }));
   squishies.forEach(o => {
     o.el.addEventListener('pointerdown', () => { o.s.t = 0.22; o.live = true; });
     const release = () => { if (o.s.t !== 0) { o.s.t = 0; o.s.v -= 1.5; } };
@@ -993,7 +1001,7 @@ const IMAGES = {
   let down = null, pointerHotUntil = 0;
   const isMazeTarget = t => !!(t && t.closest && t.closest('.maze'));
   const isMazeGesture = () => scene.dataset.mazeGesture === '1';
-  const noSquish = t => t && t.closest && t.closest('.write, button, .squishy, .maze');
+  const noSquish = t => t && t.closest && t.closest('.write, button, .squishy, .maze, .maze-page');
   scene.addEventListener('pointermove', e => {
     // On touch devices, keep maze drags completely isolated from the book.
     // Pointer capture is not equally reliable across mobile browsers, so also
@@ -1017,10 +1025,10 @@ const IMAGES = {
     // Do not even start a book gesture when a maze interaction begins.
     if (isMazeTarget(e.target) || isMazeGesture()) { down = null; return; }
     if (e.pointerType !== 'mouse') touching = true;
-    if (!noSquish(e.target)) sq.t = 0.035;
+    if (!isMazePageActive() && !noSquish(e.target)) sq.t = 0.035;
     down = { x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
   });
-  function releaseBook() { if (sq.t !== 0) { sq.t = 0; sq.v -= 0.35; } }
+  function releaseBook() { if (isMazePageActive()) { sq.t = 0; sq.x = 0; sq.v = 0; return; } if (sq.t !== 0) { sq.t = 0; sq.v -= 0.35; } }
   scene.addEventListener('pointerup', e => {
     if (isMazeTarget(e.target) || isMazeGesture()) { touching = false; down = null; return; }
     touching = false;
@@ -1075,10 +1083,12 @@ const IMAGES = {
   function go(p) {
     p = Math.max(0, Math.min(posCount() - 1, p));
     if (p === pos) return;
+    const wasMazePage = isMazePageActive();
     pos = p;
+    syncMazePageState();
     shift.t = shiftTarget();
     const n = spreadOf(p);
-    if (n === cur) { sq.v += 0.25; updateUI(); return; }
+    if (n === cur) { if (!wasMazePage && !isMazePageActive()) sq.v += 0.25; updateUI(); return; }
     const from = cur;
     cur = n;
     // flip leaves (staggered when jumping several spreads)
@@ -1090,7 +1100,7 @@ const IMAGES = {
       if (L.a.t === target) return;
       L.timer = setTimeout(() => { L.a.t = target; }, k++ * 120);
     });
-    sq.v += 0.35;
+    if (!wasMazePage && !isMazePageActive()) sq.v += 0.35;
 
     const oldMod = modFor(from), newMod = modFor(n);
     if (oldMod && oldMod !== newMod) modules[oldMod].stop();
@@ -1116,6 +1126,7 @@ const IMAGES = {
     const s = spreadOf(pos), side = sideOf(pos);
     M = mq.matches;
     pos = M ? (s === 0 ? 0 : 2 * s - 1 + (side === 'R' && s < SPREADS - 1 ? 1 : 0)) : s;
+    syncMazePageState();
     applyMode(); buildDots();
     shift.t = shift.x = shiftTarget(); shift.v = 0;
     const mod = modFor(cur);
@@ -1124,6 +1135,7 @@ const IMAGES = {
   }
   if (mq.addEventListener) mq.addEventListener('change', onModeChange); else mq.addListener(onModeChange);
   applyMode();
+  syncMazePageState();
 
   /* ---------- main loop (book physics — cheap) ---------- */
   let last = performance.now(), lastFrame = 0;
@@ -1135,6 +1147,8 @@ const IMAGES = {
     if (mazeActive) {
       hovering = false; touching = false; down = null;
       rx.t = 0; ry.t = 0; sq.t = 0; sq.x = 0; sq.v = 0;
+    } else if (isMazePageActive()) {
+      sq.t = 0; sq.x = 0; sq.v = 0;
     }
     const turning = Math.abs(shift.x - shift.t) > .25 || leaves.some(L => Math.abs(L.a.x - L.a.t) > .6);
     const squishing = Math.abs(sq.x) > .0005 || Math.abs(sq.v) > .01 || squishies.some(o => o.live);
