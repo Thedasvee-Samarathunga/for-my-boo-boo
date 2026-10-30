@@ -2035,9 +2035,11 @@ const IMAGES = {
     var r = board.getBoundingClientRect();
     return [Math.max(0, Math.min(N - 1, Math.floor((e.clientX - r.left) / r.width * N))), Math.max(0, Math.min(N - 1, Math.floor((e.clientY - r.top) / r.height * N)))];
   }
-  board.addEventListener('pointerdown', function (e) { dragging = true; try { board.setPointerCapture(e.pointerId); } catch (_) {} board.focus({ preventScroll: true }); var c = cellAt(e); toward(c[0], c[1]); });
-  board.addEventListener('pointermove', function (e) { if (!dragging) return; var c = cellAt(e); toward(c[0], c[1]); });
-  ['pointerup', 'pointercancel'].forEach(function (t) { board.addEventListener(t, function () { dragging = false; }); });
+  // Keep maze gestures inside the maze: don't let them reach the book's
+  // pointer handlers, which drive the page's tilt and squish effects.
+  board.addEventListener('pointerdown', function (e) { e.stopPropagation(); dragging = true; try { board.setPointerCapture(e.pointerId); } catch (_) {} board.focus({ preventScroll: true }); var c = cellAt(e); toward(c[0], c[1]); });
+  board.addEventListener('pointermove', function (e) { e.stopPropagation(); if (!dragging) return; var c = cellAt(e); toward(c[0], c[1]); });
+  ['pointerup', 'pointercancel'].forEach(function (t) { board.addEventListener(t, function (e) { e.stopPropagation(); dragging = false; }); });
   board.addEventListener('keydown', function (e) {
     var k = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R', w: 'U', s: 'D', a: 'L', d: 'R' }[e.key];
     if (k) { e.preventDefault(); e.stopPropagation(); move(k); }
