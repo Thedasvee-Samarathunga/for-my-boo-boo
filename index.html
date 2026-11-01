@@ -18,7 +18,8 @@
 <style>
   :root { --font: 'Montserrat', system-ui, sans-serif; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; -webkit-text-size-adjust: 100%; }
+  html, body { height: 100%; -webkit-text-size-adjust: 100%; overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; inset: 0; width: 100%; }
   body {
     font-family: var(--font);
     color: #fff;
@@ -57,8 +58,10 @@
   .clip { position: absolute; inset: 0; }
   .book { position: absolute; inset: 0; transform-style: preserve-3d; transform-origin: 50% 100%; will-change: transform; cursor: grab; }
   .book:active { cursor: grabbing; }
-  .book-inner { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-style: preserve-3d; will-change: transform; }
-  .leaf { position: absolute; top: 0; left: 50%; width: 50%; height: 100%; transform-origin: 0 50%; transform-style: preserve-3d; will-change: transform; }
+  .book-inner { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-style: preserve-3d; }
+  .leaf { position: absolute; top: 0; left: 50%; width: 50%; height: 100%; transform-origin: 0 50%; transform-style: preserve-3d; }
+  .leaf.turn { will-change: transform; }
+  .leaf.fl > .face.front, .leaf:not(.fl) > .face.back { visibility: hidden; }
 
   .face {
     position: absolute; inset: 0; overflow: hidden;
@@ -71,7 +74,7 @@
   .face.idle, .face.idle * { animation-play-state: paused !important; }
 
   .fold, .shade, .shine { position: absolute; inset: 0; pointer-events: none; }
-  .shine { z-index: 58; background: radial-gradient(circle at var(--sx, 30%) var(--sy, 20%), rgba(255,255,255,.22), transparent 50%); mix-blend-mode: soft-light; }
+  .shine { z-index: 58; background: radial-gradient(circle at var(--sx, 30%) var(--sy, 20%), rgba(255,255,255,.10), transparent 50%); }
   .fold { z-index: 59; }
   .front .fold { background: linear-gradient(90deg, rgba(0,0,0,.24), rgba(0,0,0,.07) 4%, transparent 10%); }
   .back .fold  { background: linear-gradient(270deg, rgba(0,0,0,.24), rgba(0,0,0,.07) 4%, transparent 10%); }
@@ -936,7 +939,7 @@ const IMAGES = {
     const el = document.createElement('div');
     el.className = 'leaf';
     inner.appendChild(el);
-    leaves.push({ el, a: spring(0), shades: [], timer: 0, vis: true });
+    leaves.push({ el, a: spring(0), shades: [], timer: 0, vis: true, fl: false, tn: false });
   }
   pgs.forEach((pg, p) => {
     const isFront = p % 2 === 0;
@@ -1014,8 +1017,7 @@ const IMAGES = {
     const nx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
     const ny = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
     ry.t = nx * tiltMax; rx.t = -ny * tiltMax;
-    book.style.setProperty('--sx', ((nx + 1) * 50).toFixed(1) + '%');
-    book.style.setProperty('--sy', ((ny + 1) * 50).toFixed(1) + '%');
+    if (!touchOnly) { setFaceVar('--sx', ((nx + 1) * 50).toFixed(1) + '%'); setFaceVar('--sy', ((ny + 1) * 50).toFixed(1) + '%'); }
   });
   scene.addEventListener('pointerleave', () => {
     if (isMazeGesture()) return;
@@ -1074,10 +1076,16 @@ const IMAGES = {
   });
 
   const modules = {};
-  let idleTimer = 0;
+  let idleTimer = 0, varFaces = [], lastPX = null, lastPY = null;
   function setIdle(keep) {
-    pgs.forEach(pg => pg.classList.toggle('idle', !keep.includes(+pg.dataset.spread)));
+    varFaces = [];
+    pgs.forEach(pg => { const on = keep.includes(+pg.dataset.spread); pg.classList.toggle('idle', !on); if (on) varFaces.push(pg); });
+    lastPX = lastPY = null;
   }
+  function setFaceVar(k, v) { for (let i = 0; i < varFaces.length; i++) varFaces[i].style.setProperty(k, v); }
+  const touchOnly = window.matchMedia && window.matchMedia('(hover: none)').matches;
+  const SKEY = 'card-pos-v1';
+  function savePos() { try { sessionStorage.setItem(SKEY, String(pos)); } catch (_) {} }
   function modFor(n) { const pg = pgs.find(p => +p.dataset.spread === n && p.dataset.mod); return pg ? pg.dataset.mod : null; }
 
   function go(p) {
@@ -1109,6 +1117,7 @@ const IMAGES = {
     setIdle([from, n]);
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => setIdle([cur]), 1400 + k * 120);
+    savePos();
     updateUI();
   }
   function updateUI() {
@@ -1136,6 +1145,9 @@ const IMAGES = {
   if (mq.addEventListener) mq.addEventListener('change', onModeChange); else mq.addListener(onModeChange);
   applyMode();
   syncMazePageState();
+  setIdle([cur]);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastPX = lastPY = null; } });
+  window.addEventListener('pageshow', e => { if (e.persisted) updateUI(); });
 
   /* ---------- main loop (book physics — cheap) ---------- */
   let last = performance.now(), lastFrame = 0;
@@ -1156,7 +1168,7 @@ const IMAGES = {
     const minFrame = highRate ? 1000 / 60 : 1000 / 30;
     if (now - lastFrame < minFrame) { requestAnimationFrame(loop); return; }
     const dt = Math.min(1 / 30, (now - last) / 1000); last = now; lastFrame = now;
-    if (!mazeActive && !hovering && !touching) { const t = now / 1000; rx.t = Math.sin(t * .7) * 1.6; ry.t = Math.cos(t * .55) * 2.2; }
+    if (!mazeActive && !hovering && !touching && !touchOnly) { const t = now / 1000; rx.t = Math.sin(t * .7) * 1.6; ry.t = Math.cos(t * .55) * 2.2; }
     const steps = highRate ? 4 : 2, h = dt / steps;
     for (let i = 0; i < steps; i++) {
       stepSpring(rx, 110, 16, h);
@@ -1167,9 +1179,11 @@ const IMAGES = {
       squishies.forEach(o => { if (o.live) stepSpring(o.s, 420, 8, h); });
     }
     const sx = 1 + sq.x, sy = 1 - sq.x;
-    book.style.transform = `rotateX(${rx.x.toFixed(2)}deg) rotateY(${ry.x.toFixed(2)}deg) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
-    book.style.setProperty('--px', (ry.x / (M ? 4 : 6)).toFixed(3));
-    book.style.setProperty('--py', (-rx.x / (M ? 4 : 6)).toFixed(3));
+    const bt = `rotateX(${rx.x.toFixed(2)}deg) rotateY(${ry.x.toFixed(2)}deg) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
+    if (book.dataset.t !== bt) { book.style.transform = bt; book.dataset.t = bt; }
+    const pxv = (ry.x / (M ? 4 : 6)).toFixed(2), pyv = (-rx.x / (M ? 4 : 6)).toFixed(2);
+    if (pxv !== lastPX) { lastPX = pxv; setFaceVar('--px', pxv); }
+    if (pyv !== lastPY) { lastPY = pyv; setFaceVar('--py', pyv); }
     const innerTransform = `translateX(${shift.x.toFixed(2)}%)`;
     if (inner.style.transform !== innerTransform) inner.style.transform = innerTransform;
 
@@ -1183,6 +1197,11 @@ const IMAGES = {
       const vis = turning || i === leftTop || i === rightTop;
       if (L.vis !== vis) { L.vis = vis; L.el.style.visibility = vis ? 'visible' : 'hidden'; }
       const z = (a < -90 ? i + 1 : LEAVES - i) * 2 + (turning ? 20 : 0);
+      const fl = a < -90;
+      if (L.fl !== fl) { L.fl = fl; L.el.classList.toggle('fl', fl); }
+      const tn = turning || Math.abs(a - L.a.t) > .5;
+      if (L.tn !== tn) { L.tn = tn; L.el.classList.toggle('turn', tn); }
+      L.el.style.zIndex = z;
       const leafTransform = `translateZ(${z}px) rotateY(${a.toFixed(2)}deg)`;
       if (L.lastTransform !== leafTransform) { L.el.style.transform = leafTransform; L.lastTransform = leafTransform; }
       const sh = (Math.abs(Math.sin(a * Math.PI / 180)) * 0.4).toFixed(3);
@@ -1259,8 +1278,10 @@ const IMAGES = {
         if (typeof DOE.requestPermission === 'function') {          // iPhone: needs one tap to allow motion access
           const ask = () => {
             if (on || asking) return; asking = true;
-            DOE.requestPermission().then(r => { asking = false; if (r === 'granted') listen(); }).catch(() => { asking = false; });
+            if (cur !== 2) return;
+            DOE.requestPermission().then(r => { asking = false; if (r === 'granted') listen(); else done(); }).catch(() => { asking = false; done(); });
           };
+          const done = () => ['click', 'touchend'].forEach(ev => document.removeEventListener(ev, ask));
           ['click', 'touchend'].forEach(ev => document.addEventListener(ev, ask, { passive: true }));
         } else listen();                                              // Android & others: just works
       })();
@@ -1983,6 +2004,17 @@ const IMAGES = {
 
   setIdle([0]);
   updateUI();
+  // restore the page after an iOS tab reload / memory-kill (no animation)
+  try {
+    const saved = parseInt(sessionStorage.getItem(SKEY), 10);
+    if (saved > 0 && saved < posCount()) {
+      go(saved);
+      leaves.forEach(L => clearTimeout(L.timer));
+      leaves.forEach((L, i) => { L.a.t = i < cur ? -180 : 0; L.a.x = L.a.t; L.a.v = 0; });
+      shift.t = shiftTarget(); shift.x = shift.t; shift.v = 0;
+      clearTimeout(idleTimer); setIdle([cur]);
+    }
+  } catch (_) {}
   requestAnimationFrame(loop);
 })();
 </script>
